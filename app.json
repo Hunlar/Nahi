@@ -1,0 +1,22 @@
+{
+  "name": "Nahi Telegram AI Botu",
+  "description": "Grup sohbetlerinde /nedersin komutuyla mizahi yapay zeka cevapları veren bot.",
+  "repository": "https://github.com/Hunlar/Nahi",
+  "logo": "https://media.giphy.com/media/mCRJDo24UvJMA/giphy.gif",
+  "keywords": ["telegram", "bot", "gpt", "mizahi", "python"],
+  "env": {
+    "TELEGRAM_TOKEN": {
+      "description": "BotFather'dan aldığınız Telegram Bot Token'i buraya girin",
+      "required": true
+    },
+    "OPENAI_API_KEY": {
+      "description": "https://platform.openai.com adresinden alınan API anahtarı",
+      "required": true
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
