@@ -5,17 +5,18 @@ import time
 import requests
 from collections import defaultdict
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    MessageHandler, filters
+)
 
-# Tokenlar
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
-# Log
 logging.basicConfig(level=logging.INFO)
 
-# Kullanıcı mesaj zamanları (flood kontrol)
 kullanici_mesajlari = defaultdict(list)
+BOT_USERNAME = "sabraibot"  # Buraya botun Telegram kullanıcı adını yaz
 
 # /start komutu
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -115,7 +116,6 @@ async def mesaj_kontrol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     now = time.time()
 
-    # Eski mesajları temizle (15 saniyede sadece son 3)
     kullanici_mesajlari[user_id] = [
         t for t in kullanici_mesajlari[user_id] if now - t < 15
     ]
@@ -124,9 +124,43 @@ async def mesaj_kontrol(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(kullanici_mesajlari[user_id]) >= 3:
         await update.message.reply_text("Yavaş lan yavşak 😡", reply_to_message_id=update.message.message_id)
-        kullanici_mesajlari[user_id] = []  # sayaç sıfırla
+        kullanici_mesajlari[user_id] = []
 
-# Botu başlat
+# Genel sohbet: bot grup içinde @sabraibot olarak bahsedilince cevap verir
+async def genel_sohbet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mesaj = update.message.text
+
+    if not update.message.entities:
+        return
+
+    mentions = [e for e in update.message.entities if e.type == 'mention']
+
+    if not any(update.message.text[e.offset:e.offset+e.length] == f"@{BOT_USERNAME}" for e in mentions):
+        return
+
+    system_prompt = "Sen arkadaş canlısı, esprili, samimi bir yapay zekâsın. Sohbet et."
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "mistralai/mistral-7b-instruct",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": mesaj}
+        ]
+    }
+
+    try:
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
+        cevap = response.json()["choices"][0]["message"]["content"]
+        await update.message.reply_text(cevap[:4096])
+    except Exception as e:
+        print("OpenRouter sohbet hatası:", e)
+        await update.message.reply_text("Üzgünüm, şu an sohbet edemiyorum.")
+
 if __name__ == "__main__":
     if TELEGRAM_TOKEN is None or OPENROUTER_KEY is None:
         raise ValueError("Gerekli API anahtarları eksik!")
@@ -140,6 +174,9 @@ if __name__ == "__main__":
 
     # Flood kontrol
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mesaj_kontrol))
+
+    # Genel sohbet
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, genel_sohbet))
 
     print("Bot başlatıldı...")
     app.run_polling()
