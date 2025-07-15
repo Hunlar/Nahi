@@ -1,9 +1,7 @@
 import os
 import logging
-import random
-import time
+import asyncio
 import requests
-from collections import defaultdict
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
@@ -11,21 +9,47 @@ from telegram.ext import (
 )
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 
-kullanici_mesajlari = defaultdict(list)
-BOT_USERNAME = "sabraibot"  # Buraya botun Telegram kullanıcı adını yaz
+BOT_SAHIPLERI = {123456789, 987654321}  # Buraya kendi Telegram ID'lerini yaz
 
-# /start komutu
+aktif_uyeler = set()
+sohbet_modu = False
+
+async def openrouter_soru_cevapla(soru: str) -> str:
+    if not OPENROUTER_API_KEY:
+        return "OpenRouter API anahtarı bulunamadı."
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": soru}
+        ]
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        cevap = data["choices"][0]["message"]["content"]
+        return cevap
+    except Exception as e:
+        logging.error(f"OpenRouter API hatası: {e}")
+        return "Üzgünüm, şu anda cevap veremiyorum."
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gif_url = "https://media.giphy.com/media/Gf3AUz3eBNbTW/giphy.gif"
     await update.message.reply_animation(animation=gif_url)
-
     text = (
-        "Ben Türkiye Cumhuriyeti API Destekli Bir Yapay Zeka Botuyum 🇹🇷\n"
-        "`/nedersin` komutuyla grup mesajlarına mizahi cevaplar verebilirim.\n"
+        "Ben Türkiye Cumhuriyeti API Destekli Yapay Zeka Botuyum 🇹🇷\n"
+        "`/sor` komutuyla soru sorabilir veya `/gel` ile sohbet edebilirsin.\n"
         "_Sunucularım periyodik olarak temizlenmektedir._"
     )
     buttons = [
@@ -34,11 +58,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
-# /help komutu
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gif_url = "https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif"
     await update.message.reply_animation(animation=gif_url)
-
     text = (
         "Eğer grubunuzda çalışmıyorsam, tek sebebi bazı yetkilerimin verilmemiş olmasıdır.\n"
         "🔧 Lütfen botun tüm yetkilere sahip olduğundan emin olun."
@@ -49,134 +71,105 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-# /nedersin komutu
-async def nedersin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Lütfen bir mesaja cevap vererek `/nedersin` komutunu kullan.")
-        return
+async def mesaj_kaydet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message and update.message.from_user:
+        aktif_uyeler.add(update.message.from_user.id)
 
-    kim = update.message.reply_to_message.from_user.first_name
-    mesaj = update.message.reply_to_message.text
-    hedef_mesaj = f"{kim} adlı kullanıcı şöyle dedi: \"{mesaj}\". Buna komik ve hafif argo bir yorum yap."
-
-    system_prompt = (
-        "Sen mizahi, sokak ağzıyla konuşan bir yapay zekâsın. "
-        "Rahat, esprili, bazen argo, ama kırıcı olmayan cevaplar veriyorsun."
-    )
-
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": "mistralai/mistral-7b-instruct",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": hedef_mesaj}
-            ]
-        }
-
-        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
-        cevap = response.json()["choices"][0]["message"]["content"]
-        await update.message.reply_text(cevap[:4096], reply_to_message_id=update.message.reply_to_message.message_id)
-
-    except Exception as e:
-        print("OpenRouter API hatası:", e)
-        yedek_cevaplar = [
-            f"{kim} gene bi’ şey demiş ama sanki modem fişi çekili gibi konuşuyor 😂",
-            f"{kim} susunca grup güzelleşiyor, bence alışkanlık haline getirsin 😏",
-            f"{kim} bu cümleyi kurarken kesin yüksekten düşmüş olmalı 🤡",
-            f"{kim} laf atmış ama tutmamış gibi, tekrar denesin 😬",
-            f"{kim} harbi kelime israfı yapmış ha, doğaya yazık 🌳",
-            f"{kim} yazarken klavye ağlamış olabilir, dikkat etsin 🫣",
-            f"{kim} öyle bir şey demiş ki grup 10 IQ kaybetti 😵",
-            f"{kim} mesaj attı ama ben hâlâ ‘neden’ diye sorguluyorum 😐",
-            f"{kim} yazmadan önce iki kere düşünseydi keşke 🙄",
-            f"{kim} bugün dilini eğitime yollamamış galiba 😂",
-            f"{kim} felsefe yapmış ama Platon mezarında dönüyor olabilir 😅",
-            f"{kim} yazınca grupun havası değişti, yağmur bastı ☔️",
-            f"{kim} yine laf salatası yapmış, üstüne limon sıktım 🍋",
-            f"{kim} cümle kurmuş ama gramer kaçmış gibi 😬",
-            f"{kim} tam ‘bunu yazmasan da olurdu’ örneği bırakmış 🤐",
-            f"{kim} yorum yapmış ama Google Translate bile çeviremedi 🤯",
-            f"{kim} yine derin düşüncelerle grubu salladı (!?) 🌊",
-            f"{kim} yazınca grup sessize aldı kendini 📴",
-            f"{kim} bi' şey demiş ama ben hâlâ anlam yüklemeye çalışıyorum 🧠",
-            f"{kim} beynini uçak moduna alıp yazmış olabilir 🛫"
-        ]
-        await update.message.reply_text(random.choice(yedek_cevaplar), reply_to_message_id=update.message.reply_to_message.message_id)
-
-# Flood kontrol (3 mesaj arka arkaya)
-async def mesaj_kontrol(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.type not in ["group", "supergroup"]:
-        return
-
+async def baskin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    now = time.time()
+    chat = update.effective_chat
 
-    kullanici_mesajlari[user_id] = [
-        t for t in kullanici_mesajlari[user_id] if now - t < 15
+    if user_id not in BOT_SAHIPLERI:
+        return
+
+    if chat.type not in ['group', 'supergroup']:
+        await update.message.reply_text("Bu komut sadece grup sohbetlerinde kullanılabilir.")
+        return
+
+    mesajlar = [
+        "Baskın başlıyor! 🔥🔥🔥",
+        "Herkese dikkat! Sıkı durun! 💥",
+        "Yönetici ve botlar dışındakiler hazırlanıyor... 🚨",
+        "Çılgın baskın mod aktif! 🚀",
+        "Son uyarı! Bu grupta artık temizlik zamanı! 🧹",
     ]
 
-    kullanici_mesajlari[user_id].append(now)
+    for msg in mesajlar:
+        await update.message.reply_text(msg)
+        await asyncio.sleep(1.5)
 
-    if len(kullanici_mesajlari[user_id]) >= 3:
-        await update.message.reply_text("Yavaş lan yavşak 😡", reply_to_message_id=update.message.message_id)
-        kullanici_mesajlari[user_id] = []
+    gif_url = "https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif"
+    await update.message.reply_animation(animation=gif_url)
 
-# Genel sohbet: bot grup içinde @sabraibot olarak bahsedilince cevap verir
-async def genel_sohbet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mesaj = update.message.text
-
-    if not update.message.entities:
-        return
-
-    mentions = [e for e in update.message.entities if e.type == 'mention']
-
-    if not any(update.message.text[e.offset:e.offset+e.length] == f"@{BOT_USERNAME}" for e in mentions):
-        return
-
-    system_prompt = "Sen arkadaş canlısı, esprili, samimi bir yapay zekâsın. Sohbet et."
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "mistralai/mistral-7b-instruct",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": mesaj}
-        ]
-    }
+    await asyncio.sleep(2)
 
     try:
-        response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
-        cevap = response.json()["choices"][0]["message"]["content"]
-        await update.message.reply_text(cevap[:4096])
+        admins = await context.bot.get_chat_administrators(chat.id)
+        admin_ids = {admin.user.id for admin in admins}
+        admin_ids.add(context.bot.id)
+
+        ban_say = 0
+        for uid in list(aktif_uyeler):
+            if uid not in admin_ids:
+                try:
+                    await context.bot.ban_chat_member(chat.id, uid)
+                    aktif_uyeler.remove(uid)
+                    ban_say += 1
+                    await update.message.reply_text(f"🚫 Kullanıcı banlandı: {uid}")
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logging.error(f"Banlama hatası: {e}")
+
+        await update.message.reply_text(f"Baskın tamamlandı! {ban_say} kullanıcı banlandı.")
     except Exception as e:
-        print("OpenRouter sohbet hatası:", e)
-        await update.message.reply_text("Üzgünüm, şu an sohbet edemiyorum.")
+        await update.message.reply_text(f"Hata oluştu: {e}")
 
-if __name__ == "__main__":
-    if TELEGRAM_TOKEN is None or OPENROUTER_KEY is None:
-        raise ValueError("Gerekli API anahtarları eksik!")
+async def gel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global sohbet_modu
+    user_id = update.message.from_user.id
 
+    if user_id not in BOT_SAHIPLERI:
+        return
+
+    sohbet_modu = True
+    await update.message.reply_text("Sohbet modu açıldı. Artık sohbetlere yanıt vereceğim.")
+
+async def sor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Lütfen bir soru yaz. Örnek: /sor Dünya neden yuvarlaktır?")
+        return
+
+    soru = " ".join(context.args)
+
+    cevap = await openrouter_soru_cevapla(soru)
+    await update.message.reply_text(f"Soru: {soru}\nCevap: {cevap}")
+
+async def sohbet_mesaj(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global sohbet_modu
+    if not sohbet_modu:
+        return
+
+    mesaj = update.message.text
+    if not mesaj:
+        return
+
+    cevap = await openrouter_soru_cevapla(mesaj)
+    await update.message.reply_text(cevap)
+
+def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Komutlar
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("nedersin", nedersin))
+    app.add_handler(CommandHandler("baskin", baskin))
+    app.add_handler(CommandHandler("gel", gel))
+    app.add_handler(CommandHandler("sor", sor))
 
-    # Flood kontrol
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mesaj_kontrol))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_kaydet))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, sohbet_mesaj))
 
-    # Genel sohbet
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, genel_sohbet))
-
-    print("Bot başlatıldı...")
+    print("Bot başladı.")
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
